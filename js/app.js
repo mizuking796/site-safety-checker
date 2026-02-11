@@ -295,7 +295,8 @@ const GeminiClient = {
     const resp = await fetch(`${workerUrl}/models/gemini-2.5-flash:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(60000)
     });
 
     if (!resp.ok) {
@@ -1262,6 +1263,7 @@ async function runCheck(urlStr) {
     try {
       const workerUrl = (config.workerUrl || DEFAULT_WORKER_URL).replace(/\/+$/, '');
       const fetchResp = await fetch(`${workerUrl}/fetch?url=${encodeURIComponent(urlStr)}`, {
+        headers: config.apiKey ? { 'X-API-Key': config.apiKey } : {},
         signal: AbortSignal.timeout(15000)
       });
       if (fetchResp.ok) {
@@ -1342,8 +1344,9 @@ async function runCheck(urlStr) {
     ResultsRenderer.render(urlStr, integrated, aiResult, clientAnalysis, incomplete ? incomplete.trim() : null);
 
   } catch (e) {
+    console.error('Analysis error:', e);
     ProgressMgr.hide();
-    alert('分析中にエラーが発生しました');
+    alert('分析中にエラーが発生しました: ' + (e.message || '不明なエラー'));
     showScreen('screenCheck');
   } finally {
     isChecking = false;
@@ -1353,8 +1356,12 @@ async function runCheck(urlStr) {
 // Text paste analysis mode
 async function runTextCheck(urlStr, pastedText) {
   if (isChecking) return;
-  isChecking = true;
   const config = loadConfig();
+  if (!config.apiKey) {
+    alert('APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+    return;
+  }
+  isChecking = true;
   let incomplete = null;
   let aiResult = null;
 
@@ -1408,8 +1415,9 @@ async function runTextCheck(urlStr, pastedText) {
     ResultsRenderer.render(urlStr || '(テキスト入力)', integrated, aiResult, clientAnalysis, incomplete ? incomplete.trim() : null);
 
   } catch (e) {
+    console.error('Analysis error:', e);
     ProgressMgr.hide();
-    alert('分析中にエラーが発生しました');
+    alert('分析中にエラーが発生しました: ' + (e.message || '不明なエラー'));
     showScreen('screenCheck');
   } finally {
     isChecking = false;
@@ -1431,12 +1439,11 @@ function init() {
     showScreen('screenCheck');
   } else {
     showScreen('screenSetup');
-    if (config.apiKey) document.getElementById('setupApiKey').value = config.apiKey;
   }
 
-  // Ensure workerUrl has default
-  if (!config.workerUrl) {
-    config.workerUrl = DEFAULT_WORKER_URL;
+  // Remove legacy workerUrl if it matches default (privacy: don't persist default URL)
+  if (config.workerUrl === DEFAULT_WORKER_URL) {
+    delete config.workerUrl;
     saveConfig(config);
   }
 
@@ -1470,9 +1477,12 @@ function init() {
       alert('APIキーを入力してください。');
       return;
     }
+    if (!/^AIza[A-Za-z0-9_-]{35}$/.test(apiKey)) {
+      alert('APIキーの形式が正しくありません。AIzaで始まる39文字のキーを入力してください。');
+      return;
+    }
     const cfg = loadConfig();
     cfg.apiKey = apiKey;
-    if (!cfg.workerUrl) cfg.workerUrl = DEFAULT_WORKER_URL;
     saveConfig(cfg);
     showScreen('screenCheck');
   });
@@ -1499,23 +1509,29 @@ function init() {
   document.getElementById('btnSettings').addEventListener('click', () => {
     const cfg = loadConfig();
     document.getElementById('settingsApiKey').value = cfg.apiKey || '';
-    document.getElementById('settingsWorkerUrl').value = cfg.workerUrl || DEFAULT_WORKER_URL;
-    // Set sensitivity radio
+    document.getElementById('settingsWorkerUrl').value = cfg.workerUrl || '';
+    // Set sensitivity radio (validate value to prevent selector injection)
     const sens = loadSensitivity();
-    const radio = document.querySelector(`input[name="sensitivity"][value="${sens}"]`);
-    if (radio) radio.checked = true;
+    if (['high', 'standard', 'low'].includes(sens)) {
+      const radio = document.querySelector(`input[name="sensitivity"][value="${sens}"]`);
+      if (radio) radio.checked = true;
+    }
     showScreen('screenSettings');
   });
 
   document.getElementById('btnSettingsSave').addEventListener('click', () => {
     const apiKey = document.getElementById('settingsApiKey').value.trim();
-    const workerUrl = document.getElementById('settingsWorkerUrl').value.trim() || DEFAULT_WORKER_URL;
+    const workerUrlInput = document.getElementById('settingsWorkerUrl').value.trim();
     if (!apiKey) {
       alert('APIキーを入力してください。');
       return;
     }
-    if (!validateWorkerUrl(workerUrl)) return;
-    saveConfig({ apiKey, workerUrl });
+    const cfgToSave = { apiKey };
+    if (workerUrlInput) {
+      if (!validateWorkerUrl(workerUrlInput)) return;
+      cfgToSave.workerUrl = workerUrlInput;
+    }
+    saveConfig(cfgToSave);
     // Save sensitivity
     const sensRadio = document.querySelector('input[name="sensitivity"]:checked');
     if (sensRadio) saveSensitivity(sensRadio.value);
@@ -1622,6 +1638,13 @@ function init() {
 
   // New check
   document.getElementById('btnNewCheck').addEventListener('click', resetAndGoHome);
+
+  // Cancel check
+  document.getElementById('btnCancelCheck').addEventListener('click', () => {
+    isChecking = false;
+    ProgressMgr.hide();
+    showScreen('screenCheck');
+  });
 }
 
 document.addEventListener('DOMContentLoaded', init);

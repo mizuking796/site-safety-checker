@@ -11,26 +11,13 @@
 wrangler login
 ```
 
-2. **Worker プロジェクト初期化**
+2. **デプロイ**
 ```bash
-cd /Users/mizukishirai/claude/check/worker
-wrangler init site-safety-worker --from-dash  # 既存なら
-# または新規:
-```
-
-3. **wrangler.toml 作成**
-```toml
-name = "site-safety-checker"
-main = "worker.js"
-compatibility_date = "2024-01-01"
-```
-
-4. **デプロイ**
-```bash
+cd worker/
 wrangler deploy
 ```
 
-5. **動作確認**
+3. **動作確認**
 ```bash
 curl https://site-safety-checker.<your-subdomain>.workers.dev/health
 ```
@@ -39,11 +26,13 @@ curl https://site-safety-checker.<your-subdomain>.workers.dev/health
 
 | パス | メソッド | 説明 |
 |------|----------|------|
-| `/fetch?url=<encoded>` | GET | 対象サイトHTML取得 |
-| `/models/*` | POST | Gemini APIプロキシ |
+| `/fetch?url=<encoded>` | GET | 対象サイトHTML取得（要X-API-Key） |
+| `/models/*` | POST | Gemini APIプロキシ（要X-API-Key） |
 | `/health` | GET | ヘルスチェック |
 
-## 制限事項
+## セキュリティ
+- CORS: 許可オリジンのみ（GitHub Pages + localhost）
+- /fetch, /models: X-API-Keyヘッダー必須
 - HTML取得: 最大200KB
 - タイムアウト: 10秒
 - プライベートIPアドレスはブロック（SSRF防止）

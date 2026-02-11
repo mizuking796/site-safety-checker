@@ -6,11 +6,27 @@
  *   POST /models/*             — Gemini API passthrough (CORS proxy)
  */
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-API-Key',
-};
+const ALLOWED_ORIGINS = [
+  'https://mizuking796.github.io',
+  'http://localhost',
+  'http://127.0.0.1',
+  'null', // file:// origin
+];
+
+function getCorsHeaders(request) {
+  const origin = request.headers.get('Origin') || '';
+  if (ALLOWED_ORIGINS.some(o => origin === o || origin.startsWith(o + ':') || origin.startsWith(o + '/'))) {
+    return {
+      'Access-Control-Allow-Origin': origin,
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, X-API-Key',
+    };
+  }
+  return {
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, X-API-Key',
+  };
+}
 
 const MAX_HTML_SIZE = 200 * 1024; // 200KB
 const MAX_PROXY_BODY = 500 * 1024; // 500KB
@@ -34,9 +50,18 @@ function isPrivateIP(hostname) {
     return false;
   }
 
+  // Block single-integer decimal IP (e.g., 2130706433 = 127.0.0.1)
+  if (/^\d+$/.test(h)) return true;
+
+  // Block hex IP (e.g., 0x7f000001)
+  if (/^0x/i.test(h)) return true;
+
   // IPv4 decimal-dot
   const parts = h.split('.');
   if (parts.length === 4 && parts.every(p => /^\d+$/.test(p))) {
+    // Block octal notation (leading zeros)
+    if (parts.some(p => p.length > 1 && p.startsWith('0'))) return true;
+
     const a = parseInt(parts[0]);
     const b = parseInt(parts[1]);
     if (a === 0) return true;                            // 0.0.0.0/8
@@ -49,8 +74,8 @@ function isPrivateIP(hostname) {
     if (a === 198 && (b === 18 || b === 19)) return true;// 198.18.0.0/15
   }
 
-  // Non-decimal IPv4 (octal/hex) — block if hostname looks like an IP
-  if (/^[0-9ox.]+$/i.test(h) && /^[\d.]+$/.test(h) === false) return true;
+  // Non-decimal IPv4 (octal/hex mixed) — block if hostname looks like a numeric IP
+  if (/^[0-9ox.]+$/i.test(h) && !/^[\d.]+$/.test(h)) return true;
 
   return false;
 }
@@ -92,20 +117,26 @@ async function fetchWithRedirects(url, signal) {
   return { error: 'Too many redirects', status: 502 };
 }
 
-async function handleFetch(url) {
+async function handleFetch(request, url) {
+  // Require API key for /fetch to prevent open proxy abuse
+  const apiKey = request.headers.get('X-API-Key');
+  if (!apiKey) {
+    return jsonResponse(request, { error: 'Missing API key' }, 401);
+  }
+
   let parsed;
   try {
     parsed = new URL(url);
   } catch {
-    return jsonResponse({ error: 'Invalid URL' }, 400);
+    return jsonResponse(request, { error: 'Invalid URL' }, 400);
   }
 
   if (!['http:', 'https:'].includes(parsed.protocol)) {
-    return jsonResponse({ error: 'Only HTTP/HTTPS supported' }, 400);
+    return jsonResponse(request, { error: 'Only HTTP/HTTPS supported' }, 400);
   }
 
   if (isPrivateIP(parsed.hostname)) {
-    return jsonResponse({ error: 'Private IP addresses not allowed' }, 403);
+    return jsonResponse(request, { error: 'Private IP addresses not allowed' }, 403);
   }
 
   try {
@@ -116,7 +147,7 @@ async function handleFetch(url) {
 
     if (result.error) {
       clearTimeout(timeout);
-      return jsonResponse({ error: result.error }, result.status);
+      return jsonResponse(request, { error: result.error }, result.status);
     }
 
     const { resp, finalUrl, redirectChain } = result;
@@ -153,7 +184,7 @@ async function handleFetch(url) {
       clearTimeout(timeout);
     }
 
-    return jsonResponse({
+    return jsonResponse(request, {
       status: resp.status,
       finalUrl,
       redirected: redirectChain.length > 0,
@@ -165,28 +196,28 @@ async function handleFetch(url) {
 
   } catch (e) {
     if (e.name === 'AbortError') {
-      return jsonResponse({ error: 'Fetch timeout' }, 504);
+      return jsonResponse(request, { error: 'Fetch timeout' }, 504);
     }
-    return jsonResponse({ error: `Failed to fetch: ${e.message || 'unknown error'}` }, 502);
+    return jsonResponse(request, { error: `Failed to fetch: ${e.message || 'unknown error'}` }, 502);
   }
 }
 
 async function handleGeminiProxy(request, path) {
-  // Strict path validation: only allow generateContent
-  if (!/^models\/[\w.-]+:generateContent$/.test(path)) {
-    return jsonResponse({ error: 'Invalid API path' }, 400);
+  // Strict path validation: only allow generateContent, require alphanumeric start
+  if (!/^models\/[a-zA-Z][\w.-]*:generateContent$/.test(path)) {
+    return jsonResponse(request, { error: 'Invalid API path' }, 400);
   }
 
   // API key from header (not query param)
   const apiKey = request.headers.get('X-API-Key');
   if (!apiKey) {
-    return jsonResponse({ error: 'Missing API key' }, 401);
+    return jsonResponse(request, { error: 'Missing API key' }, 401);
   }
 
   // Body size limit
   const body = request.method === 'POST' ? await request.text() : undefined;
   if (body && body.length > MAX_PROXY_BODY) {
-    return jsonResponse({ error: 'Request body too large' }, 413);
+    return jsonResponse(request, { error: 'Request body too large' }, 413);
   }
 
   const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/${path}?key=${encodeURIComponent(apiKey)}`;
@@ -198,29 +229,33 @@ async function handleGeminiProxy(request, path) {
   });
 
   const respBody = await resp.text();
+  const cors = getCorsHeaders(request);
   return new Response(respBody, {
     status: resp.status,
     headers: {
       'Content-Type': 'application/json',
-      ...CORS_HEADERS,
+      ...cors,
     },
   });
 }
 
-function jsonResponse(data, status = 200) {
+function jsonResponse(request, data, status = 200) {
+  const cors = getCorsHeaders(request);
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       'Content-Type': 'application/json',
-      ...CORS_HEADERS,
+      ...cors,
     },
   });
 }
 
 export default {
   async fetch(request) {
+    const cors = getCorsHeaders(request);
+
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: CORS_HEADERS });
+      return new Response(null, { status: 204, headers: cors });
     }
 
     const url = new URL(request.url);
@@ -229,9 +264,9 @@ export default {
     if (path === '/fetch' && request.method === 'GET') {
       const targetUrl = url.searchParams.get('url');
       if (!targetUrl) {
-        return jsonResponse({ error: 'Missing url parameter' }, 400);
+        return jsonResponse(request, { error: 'Missing url parameter' }, 400);
       }
-      return handleFetch(targetUrl);
+      return handleFetch(request, targetUrl);
     }
 
     if (path.startsWith('/models/')) {
@@ -240,9 +275,9 @@ export default {
     }
 
     if (path === '/' || path === '/health') {
-      return jsonResponse({ status: 'ok', service: 'Site Safety Checker Worker' });
+      return jsonResponse(request, { status: 'ok', service: 'Site Safety Checker Worker' });
     }
 
-    return jsonResponse({ error: 'Not found' }, 404);
+    return jsonResponse(request, { error: 'Not found' }, 404);
   },
 };

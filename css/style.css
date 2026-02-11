@@ -438,6 +438,11 @@ a { color: #4A6FA5; }
   min-height: 2.4em;
   line-height: 1.4;
 }
+.progress-cancel {
+  margin-top: 12px;
+  color: #95A5A6;
+  font-size: 0.85rem;
+}
 
 /* === Risk Banner === */
 .risk-banner {
