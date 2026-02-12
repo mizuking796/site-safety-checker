@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Site Safety Checker 技術資料</title>
+<style>
+  @page {
+    size: A4;
+    margin: 20mm 18mm 20mm 18mm;
+    @bottom-center { content: counter(page) " / " counter(pages); font-size: 9px; color: #888; }
+  }
+  body {
+    font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.7;
+    color: #1a1a1a;
+  }
+  h1 { font-size: 22pt; color: #2C3E50; border-bottom: 3px solid #4A6FA5; padding-bottom: 8px; margin-top: 0; }
+  h2 { font-size: 15pt; color: #4A6FA5; border-left: 4px solid #4A6FA5; padding-left: 10px; margin-top: 28px; page-break-after: avoid; }
+  h3 { font-size: 12pt; color: #2C3E50; margin-top: 18px; page-break-after: avoid; }
+  p { margin: 6px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 9.5pt; }
+  th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+  th { background: #4A6FA5; color: #fff; font-weight: 600; }
+  tr:nth-child(even) { background: #f8f9fa; }
+  code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 9pt; font-family: "SF Mono", "Menlo", monospace; }
+  .subtitle { font-size: 11pt; color: #666; margin-top: -6px; margin-bottom: 20px; }
+  .meta { font-size: 9pt; color: #888; text-align: right; margin-bottom: 20px; }
+  .note { background: #FFF8E1; border-left: 4px solid #F39C12; padding: 8px 12px; margin: 10px 0; font-size: 9.5pt; }
+  .important { background: #FFEBEE; border-left: 4px solid #E74C3C; padding: 8px 12px; margin: 10px 0; font-size: 9.5pt; }
+  ul, ol { margin: 6px 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+
+  /* Flow diagrams */
+  .flow { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0; margin: 14px 0; }
+  .flow-box { background: #E8F0FE; border: 2px solid #4A6FA5; border-radius: 8px; padding: 8px 14px; text-align: center; font-size: 9pt; font-weight: 600; color: #2C3E50; min-width: 90px; }
+  .flow-box.highlight { background: #4A6FA5; color: #fff; }
+  .flow-box.danger { background: #FFEBEE; border-color: #E74C3C; }
+  .flow-box.success { background: #E8F5E9; border-color: #27AE60; }
+  .flow-arrow { font-size: 16pt; color: #4A6FA5; padding: 0 4px; font-weight: bold; }
+  .flow-arrow-down { display: block; text-align: center; font-size: 16pt; color: #4A6FA5; font-weight: bold; margin: 4px 0; }
+
+  /* Radar labels */
+  .radar-table td:first-child { font-weight: 600; white-space: nowrap; width: 140px; }
+
+  /* Score colors */
+  .safe { color: #27AE60; font-weight: bold; }
+  .warning { color: #F39C12; font-weight: bold; }
+  .danger { color: #E74C3C; font-weight: bold; }
+
+  /* Architecture diagram */
+  .arch { border: 2px solid #4A6FA5; border-radius: 10px; padding: 14px; margin: 14px 0; background: #FAFBFC; }
+  .arch-row { display: flex; gap: 12px; margin: 8px 0; align-items: stretch; }
+  .arch-box { flex: 1; border: 1px solid #ccc; border-radius: 6px; padding: 8px 10px; font-size: 9pt; background: #fff; }
+  .arch-box h4 { margin: 0 0 4px; font-size: 9.5pt; color: #4A6FA5; }
+  .arch-box ul { margin: 2px 0; padding-left: 14px; font-size: 8.5pt; }
+  .arch-label { font-size: 8pt; color: #888; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; margin-bottom: 4px; }
+
+  .page-break { page-break-before: always; }
+  .toc a { text-decoration: none; color: #2C3E50; }
+  .toc li { margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<!-- Cover -->
+<div style="text-align:center; margin-top:60px;">
+  <div style="font-size:14pt; color:#4A6FA5; margin-bottom:10px;">技術資料</div>
+  <h1 style="font-size:28pt; border:none; padding:0; margin:10px 0;">Site Safety Checker</h1>
+  <p class="subtitle" style="font-size:13pt;">URL安全性チェッカー — AI多角分析＋6軸レーダーチャート</p>
+  <div style="margin:40px 0;">
+    <svg viewBox="0 0 120 120" width="100" height="100" style="margin:0 auto;">
+      <polygon points="60,10 110,35 110,85 60,110 10,85 10,35" fill="none" stroke="#4A6FA5" stroke-width="3"/>
+      <polygon points="60,25 95,42 95,78 60,95 25,78 25,42" fill="#E8F0FE" stroke="#4A6FA5" stroke-width="1.5"/>
+      <polygon points="60,30 85,42 90,70 55,88 30,72 35,42" fill="rgba(74,111,165,0.25)" stroke="#4A6FA5" stroke-width="2"/>
+      <circle cx="60" cy="30" r="3" fill="#4A6FA5"/>
+      <circle cx="85" cy="42" r="3" fill="#4A6FA5"/>
+      <circle cx="90" cy="70" r="3" fill="#4A6FA5"/>
+      <circle cx="55" cy="88" r="3" fill="#4A6FA5"/>
+      <circle cx="30" cy="72" r="3" fill="#4A6FA5"/>
+      <circle cx="35" cy="42" r="3" fill="#4A6FA5"/>
+    </svg>
+  </div>
+  <table style="width:auto; margin:30px auto; border:none;">
+    <tr style="background:none;"><td style="border:none; text-align:right; color:#888; padding:3px 12px;">作成日</td><td style="border:none; padding:3px 12px;">2026年2月12日</td></tr>
+    <tr style="background:none;"><td style="border:none; text-align:right; color:#888; padding:3px 12px;">バージョン</td><td style="border:none; padding:3px 12px;">1.2（事例調査手法追加版）</td></tr>
+    <tr style="background:none;"><td style="border:none; text-align:right; color:#888; padding:3px 12px;">開発者</td><td style="border:none; padding:3px 12px;">特定非営利活動法人リハビリコラボレーション</td></tr>
+  </table>
+</div>
+
+<!-- TOC -->
+<div class="page-break"></div>
+<h2 style="border-left:none; padding-left:0;">目次</h2>
+<ol class="toc" style="font-size:10.5pt;">
+  <li><a href="#overview">プロジェクト概要</a></li>
+  <li><a href="#architecture">システムアーキテクチャ</a></li>
+  <li><a href="#screen-flow">画面遷移フロー</a></li>
+  <li><a href="#analysis-flow">分析フロー</a></li>
+  <li><a href="#scoring">6軸スコアリングアルゴリズム</a></li>
+  <li><a href="#categories">検出対象カテゴリ（19種 + 7種）</a></li>
+  <li><a href="#sensitivity">感度調整アルゴリズム</a></li>
+  <li><a href="#client-analysis">クライアント側URL構造分析</a></li>
+  <li><a href="#gemini">Gemini AIプロンプト設計</a></li>
+  <li><a href="#research">事例調査手法と活用方法</a></li>
+  <li><a href="#security">セキュリティ設計</a></li>
+  <li><a href="#tech-spec">技術仕様</a></li>
+  <li><a href="#file-structure">ファイル構成</a></li>
+</ol>
+
+<!-- 1. Overview -->
+<div class="page-break"></div>
+<h2 id="overview">1. プロジェクト概要</h2>
+
+<h3>1.1 目的</h3>
+<p>Site Safety Checkerは、URLを入力するだけでウェブサイトの安全性をAIで多角的に分析するツールです。詐欺サイト・危険サイトの特徴パターンを検出し、6軸レーダーチャートで信頼性を可視化します。</p>
+
+<h3>1.2 対象ユーザー</h3>
+<ul>
+  <li>怪しいURLを受け取った一般ユーザー（SNS、メール、SMS等）</li>
+  <li>通販サイトの安全性を確認したい消費者</li>
+  <li>投資・副業案内の信頼性を判断したい方</li>
+</ul>
+
+<h3>1.3 主要機能</h3>
+<table>
+  <tr><th>機能</th><th>説明</th></tr>
+  <tr><td>URL分析</td><td>URLを入力→クライアント側構造分析＋AI分析で総合評価</td></tr>
+  <tr><td>テキスト分析</td><td>ページ内容をコピペ→AI分析（ログイン必要ページ等に対応）</td></tr>
+  <tr><td>6軸レーダーチャート</td><td>信頼性を6次元で可視化（Canvas描画）</td></tr>
+  <tr><td>19カテゴリ詐欺検出</td><td>闇バイト・投資詐欺・フィッシング等の既知パターンマッチ</td></tr>
+  <tr><td>7種広告規制違反検出</td><td>景表法・薬機法等の横断的な法令違反チェック</td></tr>
+  <tr><td>3段階感度調整</td><td>高感度/標準/低感度でスコアリング閾値を調整</td></tr>
+  <tr><td>BYOK（Bring Your Own Key）</td><td>ユーザー自身のGemini APIキーを使用、開発者サーバー不要</td></tr>
+</table>
+
+<div class="note">本ツールの分析結果はAIによる参考情報であり、サイトの安全性を保証するものではありません。</div>
+
+<!-- 2. Architecture -->
+<div class="page-break"></div>
+<h2 id="architecture">2. システムアーキテクチャ</h2>
+
+<h3>2.1 全体構成</h3>
+<div class="arch">
+  <div class="arch-label">ブラウザ（クライアント）</div>
+  <div class="arch-row">
+    <div class="arch-box">
+      <h4>index.html</h4>
+      <ul><li>5画面シェル（SPA）</li><li>利用規約・同意フロー</li><li>画像付きセットアップガイド</li></ul>
+    </div>
+    <div class="arch-box">
+      <h4>app.js（IIFE）</h4>
+      <ul><li>URL構造分析</li><li>DOM解析・コンテンツ抽出</li><li>スコア統合・レーダーチャート描画</li><li>Gemini APIクライアント</li></ul>
+    </div>
+    <div class="arch-box">
+      <h4>localStorage</h4>
+      <ul><li>ssc_config（APIキー）</li><li>ssc_consent（同意日）</li><li>ssc_sensitivity（感度）</li></ul>
+    </div>
+  </div>
+  <div style="text-align:center; margin:8px 0; font-size:10pt; color:#4A6FA5;">&#9660; HTTPS（X-API-Key認証） &#9660;</div>
+  <div class="arch-label">Cloudflare Workers</div>
+  <div class="arch-row">
+    <div class="arch-box">
+      <h4>/fetch エンドポイント</h4>
+      <ul><li>対象サイトHTML取得</li><li>SSRF防止（プライベートIP遮断）</li><li>200KB上限・10秒タイムアウト</li><li>リダイレクト追跡（最大5回）</li></ul>
+    </div>
+    <div class="arch-box">
+      <h4>/models/* エンドポイント</h4>
+      <ul><li>Gemini APIプロキシ（CORS対応）</li><li>X-API-KeyをURLパラメータに変換</li><li>パス検証（generateContentのみ）</li><li>500KB リクエスト上限</li></ul>
+    </div>
+  </div>
+  <div style="text-align:center; margin:8px 0; font-size:10pt; color:#888;">&#9660; 外部API &#9660;</div>
+  <div class="arch-row">
+    <div class="arch-box" style="background:#f0f0f0;">
+      <h4>対象サイト</h4>
+      <ul><li>HTMLコンテンツ</li><li>HTTPヘッダー</li></ul>
+    </div>
+    <div class="arch-box" style="background:#f0f0f0;">
+      <h4>Gemini API（gemini-2.5-flash）</h4>
+      <ul><li>構造化出力（JSON Schema）</li><li>6軸スコア＋詐欺カテゴリ＋所見</li></ul>
+    </div>
+  </div>
+</div>
+
+<h3>2.2 技術スタック</h3>
+<table>
+  <tr><th>レイヤー</th><th>技術</th><th>詳細</th></tr>
+  <tr><td>フロントエンド</td><td>Vanilla HTML/CSS/JS</td><td>外部依存なし、IIFE パターン</td></tr>
+  <tr><td>チャート描画</td><td>Canvas API</td><td>Retina対応6軸レーダーチャート自前実装</td></tr>
+  <tr><td>プロキシ</td><td>Cloudflare Workers</td><td>エッジコンピューティング、グローバル配信</td></tr>
+  <tr><td>AI分析</td><td>Gemini 2.5 Flash</td><td>構造化出力（JSON Schema）、BYOK</td></tr>
+  <tr><td>ホスティング</td><td>GitHub Pages</td><td>HTTPS自動対応、noindex</td></tr>
+</table>
+
+<!-- 3. Screen Flow -->
+<div class="page-break"></div>
+<h2 id="screen-flow">3. 画面遷移フロー</h2>
+
+<h3>3.1 初回利用フロー</h3>
+<div class="flow">
+  <div class="flow-box">利用規約<br><small>（Consent）</small></div>
+  <div class="flow-arrow">&#8594;</div>
+  <div class="flow-box">同意チェック<br>＋ボタン</div>
+  <div class="flow-arrow">&#8594;</div>
+  <div class="flow-box">初期設定<br><small>（Setup）</small></div>
+  <div class="flow-arrow">&#8594;</div>
+  <div class="flow-box">APIキー入力<br><small>画像付きガイド</small></div>
+  <div class="flow-arrow">&#8594;</div>
+  <div class="flow-box highlight">チェック画面<br><small>（Check）</small></div>
+</div>
+
+<h3>3.2 2回目以降</h3>
+<div class="flow">
+  <div class="flow-box highlight">チェック画面<br><small>（Check）</small></div>
+  <div style="font-size:8pt; color:#888; padding:0 6px;">localStorage<br>ssc_consent確認済み</div>
+</div>
+
+<h3>3.3 全画面遷移図</h3>
+<table>
+  <tr><th>画面</th><th>ID</th><th>遷移先</th><th>トリガー</th></tr>
+  <tr><td>利用規約</td><td>screenConsent</td><td>Setup or Check</td><td>「同意して始める」ボタン</td></tr>
+  <tr><td>初期設定</td><td>screenSetup</td><td>Check</td><td>「保存して始める」ボタン</td></tr>
+  <tr><td>チェック</td><td>screenCheck</td><td>Results / Settings</td><td>「チェック」or 歯車ボタン</td></tr>
+  <tr><td>結果</td><td>screenResults</td><td>Check</td><td>「別のURLをチェック」ボタン</td></tr>
+  <tr><td>設定</td><td>screenSettings</td><td>Check / Consent</td><td>「保存」「戻る」「利用規約を表示」</td></tr>
+</table>
+
+<h3>3.4 分析中フロー</h3>
+<div class="flow">
+  <div class="flow-box">URL入力</div>
+  <div class="flow-arrow">&#8594;</div>
+  <div class="flow-box highlight">プログレス<br>オーバーレイ</div>
+  <div class="flow-arrow">&#8594;</div>
+  <div class="flow-box success">結果画面</div>
+</div>
+<p style="font-size:9pt; color:#888; text-align:center;">プログレス中は「キャンセル」ボタンで中断可能</p>
+
+<!-- 4. Analysis Flow -->
+<div class="page-break"></div>
+<h2 id="analysis-flow">4. 分析フロー</h2>
+
+<h3>4.1 URL分析モード</h3>
+
+<table>
+  <tr><th>ステージ</th><th>進捗</th><th>処理内容</th><th>タイムアウト</th></tr>
+  <tr><td>1. URL構造分析</td><td>5%</td><td>クライアント側でTLD、ブランド偽装、IDN等をチェック</td><td>即座</td></tr>
+  <tr><td>2. サイト取得</td><td>15%</td><td>Worker経由でHTML+ヘッダー取得</td><td>15秒</td></tr>
+  <tr><td>3. コンテンツ解析</td><td>35%</td><td>DOMParserでテキスト/フォーム/スクリプト抽出</td><td>即座</td></tr>
+  <tr><td>4. AI分析</td><td>55%</td><td>Gemini APIで6軸スコア＋詐欺パターン分析</td><td>60秒</td></tr>
+  <tr><td>5. 結果統合</td><td>95%</td><td>クライアント＋AIスコアブレンド、リスクレベル判定</td><td>即座</td></tr>
+</table>
+
+<h3>4.2 部分結果の段階的表示</h3>
+<p>各ステージが失敗しても、それ以前のステージの結果を表示します。</p>
+
+<table>
+  <tr><th>失敗箇所</th><th>表示される結果</th></tr>
+  <tr><td>Worker取得失敗</td><td>URL構造分析のみ（ドメイン信頼性＋技術的安全性）</td></tr>
+  <tr><td>AI分析失敗</td><td>URL構造分析＋HTML抽出結果（4次元はデフォルト50点）</td></tr>
+  <tr><td>全成功</td><td>6軸完全スコア＋詐欺カテゴリ＋詳細所見＋AI総評</td></tr>
+</table>
+
+<h3>4.3 テキスト分析モード</h3>
+<p>ログイン必要ページ等、Worker経由で取得できない場合に使用。ページ内容をコピペして直接AI分析に送信します。</p>
+<div class="flow">
+  <div class="flow-box">テキスト貼り付け</div>
+  <div class="flow-arrow">&#8594;</div>
+  <div class="flow-box">簡易htmlContent<br>構築</div>
+  <div class="flow-arrow">&#8594;</div>
+  <div class="flow-box highlight">Gemini AI分析</div>
+  <div class="flow-arrow">&#8594;</div>
+  <div class="flow-box success">結果表示</div>
+</div>
+
+<!-- 5. Scoring Algorithm -->
+<div class="page-break"></div>
+<h2 id="scoring">5. 6軸スコアリングアルゴリズム</h2>
+
+<h3>5.1 評価次元</h3>
+<table class="radar-table">
+  <tr><th>軸</th><th>キー</th><th>評価内容</th><th>スコア源</th></tr>
+  <tr><td>ドメイン信頼性</td><td>domain_trust</td><td>URL構造、TLD、ブランド偽装、SSL</td><td>クライアント40% + AI 60%</td></tr>
+  <tr><td>コンテンツ安全性</td><td>content_safety</td><td>不審キーワード、煽り表現、緊急性</td><td>AI 100%</td></tr>
+  <tr><td>運営者透明性</td><td>operator_transparency</td><td>特商法表記、会社概要、連絡先</td><td>AI 100%</td></tr>
+  <tr><td>主張の信頼性</td><td>claim_credibility</td><td>誇大広告、非現実的保証</td><td>AI 100%</td></tr>
+  <tr><td>詐欺パターン非合致</td><td>scam_pattern</td><td>19カテゴリの既知パターンとの非類似度</td><td>AI 100%</td></tr>
+  <tr><td>技術的安全性</td><td>tech_safety</td><td>SSL、難読化スクリプト、隠しフォーム</td><td>クライアント40% + AI 60%</td></tr>
+</table>
+
+<h3>5.2 スコア統合アルゴリズム</h3>
+<p>各軸は0〜100のスコアで表現されます。</p>
+
+<pre style="background:#f5f5f5; padding:12px; border-radius:6px; font-size:8.5pt; line-height:1.5;">
+<b>// ブレンド比率</b>
+domain_trust  = clientScore * 0.4 + aiScore * 0.6
+tech_safety   = clientScore * 0.4 + aiScore * 0.6
+他4次元       = aiScore * 1.0
+
+<b>// 総合平均</b>
+average = (domain_trust + content_safety + operator_transparency
+         + claim_credibility + scam_pattern + tech_safety) / 6
+
+<b>// リスクレベル判定</b>
+average >= 80  → safe    （安全）
+average >= 60  → low     （低リスク）
+average >= 40  → medium  （中リスク）
+average >= 20  → high    （高リスク）
+average <  20  → critical（危険）
+
+<b>// エスカレーションルール（感度依存）</b>
+criticalDims = 閾値以下の次元数
+if (criticalDims >= 2 || scam_pattern <= 閾値) → 最低 high
+if (criticalDims == 1) → safe の場合 low にナッジ
+</pre>
+
+<h3>5.3 リスクレベル表示</h3>
+<table>
+  <tr><th>レベル</th><th>アイコン</th><th>色</th><th>説明</th></tr>
+  <tr><td class="safe">safe</td><td>&#x2705;</td><td>#27AE60</td><td>特に問題は検出されませんでした</td></tr>
+  <tr><td style="color:#8BC34A; font-weight:bold;">low</td><td>&#x1F7E2;</td><td>#8BC34A</td><td>軽微な注意点があります</td></tr>
+  <tr><td class="warning">medium</td><td>&#x26A0;&#xFE0F;</td><td>#F39C12</td><td>複数の注意点が見つかりました</td></tr>
+  <tr><td class="danger">high</td><td>&#x1F6A8;</td><td>#E74C3C</td><td>詐欺の可能性があります</td></tr>
+  <tr><td class="danger">critical</td><td>&#x26D4;</td><td>#C0392B</td><td>非常に危険なサイトです</td></tr>
+</table>
+
+<!-- 6. Categories -->
+<div class="page-break"></div>
+<h2 id="categories">6. 検出対象カテゴリ</h2>
+
+<h3>6.1 詐欺・違法サイトカテゴリ（19種）</h3>
+<table>
+  <tr><th>#</th><th>カテゴリ</th><th>主な検出パターン</th></tr>
+  <tr><td>1</td><td>闇バイト</td><td>「高額報酬」「即日払い」「簡単作業」、Telegram/Signal誘導</td></tr>
+  <tr><td>2</td><td>投資詐欺</td><td>「元本保証」「年利30%」、金融庁無登録業者、ポンジスキーム</td></tr>
+  <tr><td>3</td><td>フィッシング</td><td>ブランド偽装URL、ログインフォーム、個人情報入力要求</td></tr>
+  <tr><td>4</td><td>偽通販</td><td>極端な割引、会社概要不備、不自然な日本語</td></tr>
+  <tr><td>5</td><td>健康詐欺</td><td>薬機法違反、「確実に治る」、医療広告規制違反</td></tr>
+  <tr><td>6</td><td>被害回復詐欺</td><td>「被害金を取り戻せます」、二次被害</td></tr>
+  <tr><td>7</td><td>サポート詐欺</td><td>偽Microsoft警告、遠隔操作ソフト導入要求</td></tr>
+  <tr><td>8</td><td>ロマンス詐欺</td><td>出会い系、軍人・医師なりすまし、送金要求</td></tr>
+  <tr><td>9</td><td>違法オンラインカジノ</td><td>日本向け違法賭博サイト</td></tr>
+  <tr><td>10</td><td>偽造品・コピー品販売</td><td>ブランドコピー、スーパーコピー</td></tr>
+  <tr><td>11</td><td>架空請求・ワンクリック詐欺</td><td>「登録完了」「退会費用」</td></tr>
+  <tr><td>12</td><td>副業・タスク詐欺</td><td>「スマホで月50万」、初期費用要求</td></tr>
+  <tr><td>13</td><td>なりすまし広告詐欺</td><td>著名人の偽広告、AIディープフェイク</td></tr>
+  <tr><td>14</td><td>仮想通貨・暗号資産詐欺</td><td>偽取引所、ICO詐欺、ウォレット接続要求</td></tr>
+  <tr><td>15</td><td>情報商材詐欺</td><td>「秘密のノウハウ」、高額コンサル</td></tr>
+  <tr><td>16</td><td>闇金・違法貸金業</td><td>「ブラックOK」「審査なし」、貸金業登録番号偽造</td></tr>
+  <tr><td>17</td><td>著作権侵害・海賊版</td><td>漫画・映画・ソフトの違法配信</td></tr>
+  <tr><td>18</td><td>還付金詐欺・偽行政サイト</td><td>偽マイナポータル、還付金手続き</td></tr>
+  <tr><td>19</td><td>霊感商法・疑似科学</td><td>スピリチュアル詐欺、水素水、マイナスイオン、EM菌</td></tr>
+</table>
+
+<h3>6.2 広告・表示規制違反（7種）</h3>
+<table>
+  <tr><th>#</th><th>違反パターン</th><th>関連法令</th></tr>
+  <tr><td>1</td><td>根拠なきNo.1表示</td><td>景品表示法（優良誤認）</td></tr>
+  <tr><td>2</td><td>効果のない商品の効能表示</td><td>薬機法・景表法</td></tr>
+  <tr><td>3</td><td>二重価格表示</td><td>景品表示法（有利誤認）</td></tr>
+  <tr><td>4</td><td>ステルスマーケティング</td><td>景品表示法（2023年10月〜）</td></tr>
+  <tr><td>5</td><td>打消し表示の不備</td><td>景品表示法</td></tr>
+  <tr><td>6</td><td>定期購入の表示不備</td><td>特定商取引法</td></tr>
+  <tr><td>7</td><td>グリーンウォッシュ</td><td>景品表示法</td></tr>
+</table>
+
+<!-- 7. Sensitivity -->
+<div class="page-break"></div>
+<h2 id="sensitivity">7. 感度調整アルゴリズム</h2>
+
+<h3>7.1 3段階設定</h3>
+<table>
+  <tr><th>設定</th><th>用途</th><th>特徴</th></tr>
+  <tr><td><b>高感度</b></td><td>疑わしいサイトを見逃さない</td><td>誤検知（偽陽性）が多くなる</td></tr>
+  <tr><td><b>標準（推奨）</b></td><td>バランスの取れた判定</td><td>デフォルト設定</td></tr>
+  <tr><td><b>低感度</b></td><td>誤検知を減らす</td><td>見逃し（偽陰性）が多くなる</td></tr>
+</table>
+
+<h3>7.2 閾値パラメータ</h3>
+<table>
+  <tr><th>パラメータ</th><th>高感度</th><th>標準</th><th>低感度</th><th>効果</th></tr>
+  <tr><td>criticalDim閾値</td><td>20</td><td>15</td><td>10</td><td>この値以下の次元をcriticalと判定</td></tr>
+  <tr><td>warnDim閾値</td><td>35</td><td>30</td><td>20</td><td>この値以下の次元をwarnと判定</td></tr>
+  <tr><td>scamPattern閾値</td><td>35</td><td>30</td><td>20</td><td>詐欺パターン軸の警戒閾値</td></tr>
+</table>
+
+<h3>7.3 プロンプト補正</h3>
+<p>感度設定に応じてGemini APIへのプロンプトに指示を追加します。</p>
+<table>
+  <tr><th>設定</th><th>追加プロンプト</th></tr>
+  <tr><td>高感度</td><td>「少しでも疑わしい点がある場合は積極的に低いスコアを付けてください。安全側に判定を誤るより、危険側に誤る方が望ましいです。」</td></tr>
+  <tr><td>標準</td><td>（追加なし）</td></tr>
+  <tr><td>低感度</td><td>「明確な根拠がある場合のみ低いスコアを付けてください。曖昧な場合は高めのスコアにしてください。」</td></tr>
+</table>
+
+<!-- 8. Client Analysis -->
+<h2 id="client-analysis">8. クライアント側URL構造分析</h2>
+
+<h3>8.1 分析項目と減点</h3>
+<table>
+  <tr><th>チェック項目</th><th>減点（domain_trust）</th><th>減点（tech_safety）</th></tr>
+  <tr><td>HTTP（SSL未使用）</td><td>—</td><td>-30</td></tr>
+  <tr><td>IPアドレスURL</td><td>-40</td><td>—</td></tr>
+  <tr><td>不審なTLD（.xyz, .top等 28種）</td><td>-20</td><td>—</td></tr>
+  <tr><td>過剰サブドメイン（5階層以上）</td><td>-15</td><td>—</td></tr>
+  <tr><td>ブランドタイポスクワッティング（24社）</td><td>-30</td><td>—</td></tr>
+  <tr><td>IDNホモグラフ攻撃</td><td>-25</td><td>—</td></tr>
+  <tr><td>過剰ハイフン（4つ以上）</td><td>-10</td><td>—</td></tr>
+  <tr><td>異常なポート番号</td><td>—</td><td>-15</td></tr>
+  <tr><td>過剰パス深度（6以上）</td><td>-10</td><td>—</td></tr>
+  <tr><td>不審パスキーワード</td><td>-15</td><td>—</td></tr>
+</table>
+
+<h3>8.2 監視対象ブランド（24社）</h3>
+<p style="font-size:9pt;">Amazon, 楽天, Yahoo, Google, Apple, Microsoft, Facebook, Instagram, Twitter, PayPal, Netflix, docomo, SoftBank, メルカリ, PayPay, SMBC, MUFG, みずほ, ゆうちょ, イオン, ファミリーマート, ローソン, ユニクロ 等</p>
+
+<!-- 9. Gemini -->
+<div class="page-break"></div>
+<h2 id="gemini">9. Gemini AIプロンプト設計</h2>
+
+<h3>9.1 プロンプト構造</h3>
+<table>
+  <tr><th>セクション</th><th>位置</th><th>内容</th></tr>
+  <tr><td>回答ルール</td><td>冒頭</td><td>反ハルシネーション6ルール（LLMが最初に読む位置に配置）</td></tr>
+  <tr><td>感度指示</td><td>冒頭直後</td><td>高感度/低感度時のスコアリング方針（標準時は省略）</td></tr>
+  <tr><td>19カテゴリ定義</td><td>中段</td><td>各カテゴリの特徴パターン一覧（法令違反を内包）</td></tr>
+  <tr><td>7種広告規制違反</td><td>中段</td><td>横断的な法令違反パターン</td></tr>
+  <tr><td>分析対象データ</td><td>末尾</td><td>URL、クライアント分析結果、抽出テキスト、ヘッダー情報</td></tr>
+</table>
+
+<h3>9.2 構造化出力（JSON Schema）</h3>
+<p>Gemini APIの<code>response_mime_type: "application/json"</code>と<code>response_schema</code>を使用し、確実にパース可能なJSONを取得します。</p>
+
+<table>
+  <tr><th>フィールド</th><th>型</th><th>説明</th></tr>
+  <tr><td>scores.*</td><td>integer (0-100)</td><td>6軸スコア</td></tr>
+  <tr><td>detected_categories[]</td><td>array</td><td>検出された詐欺カテゴリ（名前＋信頼度＋説明）</td></tr>
+  <tr><td>ad_violations[]</td><td>array</td><td>検出された広告規制違反</td></tr>
+  <tr><td>findings[]</td><td>array</td><td>詳細所見（タイトル＋深刻度＋説明）</td></tr>
+  <tr><td>summary</td><td>string</td><td>AI総合評価（日本語200文字以内）</td></tr>
+</table>
+
+<h3>9.3 反ハルシネーションルール</h3>
+<ol>
+  <li>分析対象のテキストに<b>書かれていない内容</b>を「存在する」と断定しない</li>
+  <li>URLの見た目だけで実在する企業との関連を断定しない</li>
+  <li>「〜の可能性がある」と「〜である」を明確に区別する</li>
+  <li>判断材料が不十分な場合は中間スコア（40-60）を付ける</li>
+  <li>検出カテゴリは<b>明確な根拠</b>がある場合のみ追加する</li>
+  <li>所見には必ず<b>具体的な根拠</b>（テキスト引用等）を含める</li>
+</ol>
+
+<!-- 10. Research Methodology -->
+<div class="page-break"></div>
+<h2 id="research">10. 事例調査手法と活用方法</h2>
+
+<h3>10.1 調査の目的</h3>
+<p>本ツールの検出精度は、Gemini AIプロンプトに埋め込まれた<b>実際の事例データ</b>に大きく依存します。一般的なキーワードマッチではなく、公的機関が公表した統計・逮捕事例・行政処分・実際の手口フレーズを体系的に収集し、19カテゴリの詐欺パターン定義と7種の広告規制違反パターンに反映しています。</p>
+
+<div class="note">調査は7つの専門リサーチプロセスを<b>並列実行</b>し、各分野の公的情報源からデータを網羅的に収集しました。</div>
+
+<h3>10.2 調査対象機関と収集データ</h3>
+<table>
+  <tr><th>調査対象機関</th><th>収集したデータ</th><th>活用先カテゴリ</th></tr>
+  <tr><td><b>警察庁</b><br>（National Police Agency）</td><td>特殊詐欺統計（件数・被害額）、闇バイト逮捕事例、賭博事犯検挙数、闇金検挙事件数、還付金詐欺認知件数</td><td>Cat1闇バイト、Cat9違法カジノ、Cat16闇金、Cat18還付金詐欺</td></tr>
+  <tr><td><b>金融庁</b><br>（Financial Services Agency）</td><td>SNS型投資詐欺被害統計、無登録業者警告リスト（KuCoin/Bybit/MEXC等5社）、金融商品取引法の断定的判断提供禁止規定</td><td>Cat2投資詐欺、Cat14仮想通貨詐欺、誤検知防止（正当な金融サービス識別）</td></tr>
+  <tr><td><b>消費者庁</b><br>（Consumer Affairs Agency）</td><td>景表法措置命令事例（シボローカ/MIHORE/メラット等）、事業者名公表（協栄商事/和等）、ステマ処分事例（祐真会/RIZAP等6件）、タスク詐欺相談件数</td><td>Cat5健康詐欺、Cat12副業詐欺、Cat15情報商材、広告規制違反7種全て</td></tr>
+  <tr><td><b>IPA</b><br>（情報処理推進機構）</td><td>偽ウイルス警告相談件数（2024年Q1: 1,385件）、ネットバンキング乗っ取り事例、サポート詐欺手口分析</td><td>Cat7サポート詐欺</td></tr>
+  <tr><td><b>国民生活センター</b><br>（PIO-NET）</td><td>インターネット通販相談年間27万件、水素水相談2,260件、開運商法相談年間1,200〜1,500件、占いサイト相談年間2,000件超、情報商材相談6,593件</td><td>Cat4偽通販、Cat5健康詐欺、Cat15情報商材、Cat19霊感商法・疑似科学</td></tr>
+  <tr><td><b>JC3</b><br>（日本サイバー犯罪対策センター）</td><td>偽ECサイト通報47,278件（2023年）、フィッシング通報年間171.8万件、なりすましブランドTop10</td><td>Cat3フィッシング、Cat4偽通販</td></tr>
+  <tr><td><b>JFC</b><br>（日本ファクトチェックセンター）</td><td>2024年検証330件、AIディープフェイク事例（堀江貴文AI音声→2.2億円被害）、災害偽情報（能登震災）</td><td>Cat13なりすまし広告詐欺</td></tr>
+  <tr><td><b>厚生労働省</b></td><td>医療広告ガイドライン違反（2023年度: 1,098サイト/6,328件）、あはき法・柔整法違反事例</td><td>Cat5健康詐欺・医療広告違反</td></tr>
+  <tr><td><b>税関</b>（財務省）</td><td>知的財産侵害物品差止33,019件（2024年、過去最多）</td><td>Cat10偽造品・コピー品販売</td></tr>
+  <tr><td><b>最高裁判所</b></td><td>「給料ファクタリングは貸金業法適用の貸付」判決（2023年）、漫画村賠償額17.3億円（2024年）</td><td>Cat16闇金、Cat17著作権侵害</td></tr>
+</table>
+
+<h3>10.3 並列リサーチプロセス</h3>
+<p>効率的なデータ収集のため、以下の7つの専門リサーチプロセスを同時並行で実行しました。</p>
+
+<table>
+  <tr><th>#</th><th>リサーチ領域</th><th>収集対象</th><th>主要情報源</th></tr>
+  <tr><td>1</td><td>闇バイト・特殊詐欺</td><td>首都圏連続強盗事件、Telegram経由の犯罪者募集手口、隠語辞典</td><td>警察庁、報道各社</td></tr>
+  <tr><td>2</td><td>投資詐欺・ロマンス詐欺・フィッシング</td><td>SNS型投資詐欺統計、有名人偽装事例、フィッシング通報データ、偽装ブランドランキング</td><td>金融庁、JC3、フィッシング対策協議会</td></tr>
+  <tr><td>3</td><td>景表法違反事例</td><td>措置命令データベース（2022〜2024年）、No.1表示集中取締り14社、ステマ規制6件</td><td>消費者庁、公正取引委員会</td></tr>
+  <tr><td>4</td><td>10カテゴリの具体的検出フレーズ</td><td>各カテゴリで実際に使用される勧誘文言・脅迫文言・煽り表現の網羅的収集</td><td>国民生活センター、IPA、消費者庁注意喚起</td></tr>
+  <tr><td>5</td><td>偽通販・闇金・仮想通貨・情報商材</td><td>大型詐欺事件（ジュビリーエース650億円等）、逮捕事例、手口の進化パターン</td><td>警察庁、金融庁、消費者庁</td></tr>
+  <tr><td>6</td><td>霊感商法・疑似科学・スピリチュアル詐欺</td><td>水素水措置命令、マイナスイオン措置命令、占いサイト被害事例、消費者契約法改正</td><td>国民生活センター、消費者庁</td></tr>
+  <tr><td>7</td><td>消費者庁の施策・ファクトチェック</td><td>定期購入ダークパターン（年間9万件）、タスク詐欺10億円、JFC検証330件</td><td>消費者庁、JFC</td></tr>
+</table>
+
+<h3>10.4 収集データの活用方法</h3>
+<p>収集した事例データは、Geminiプロンプト内の以下の4つの要素として体系的に組み込まれています。</p>
+
+<table>
+  <tr><th>プロンプト要素</th><th>活用方法</th><th>具体例</th></tr>
+  <tr><td><b>統計データ</b><br>（冒頭に配置）</td><td>各カテゴリの被害規模を示し、AIの判断の重み付けを支援。数値により深刻度を認識させる。</td><td>Cat2: 「2024年被害: 10,237件・1,271.9億円（前年比179.4%増）」<br>Cat8: 「2024年1-9月被害: 271億円、平均被害額1,242.7万円」</td></tr>
+  <tr><td><b>検出フレーズ</b><br>（箇条書きで列挙）</td><td>実際の詐欺サイトで使用されている文言をそのまま記載。AIがサイト本文とパターンマッチングする際の参照基準。</td><td>Cat1: 「人から物を受け取るだけ」「報酬35万円 資金調達」<br>Cat12: 「いいねを押すだけ」「スクショを撮るだけ」</td></tr>
+  <tr><td><b>逮捕・処分事例</b><br>（実名+年で記載）</td><td>具体的な事業者名と処分内容を含めることで、類似パターンの認識精度を向上。</td><td>Cat5: 「シンゲンメディカル社逮捕(2019年)」「ステラ漢方社逮捕(2020年)」<br>Cat16: 「BPMH社13人逮捕(2025年)、85億円」</td></tr>
+  <tr><td><b>手口の構造</b><br>（フロー形式で記載）</td><td>詐欺の段階的な手口を記述し、サイトが手口のどの段階に該当するかをAIが判断できるようにする。</td><td>Cat2: 「偽広告→LINEグループ誘導→『先生』が指導→サクラ利益報告→高額投入→連絡断絶」<br>Cat12: 「SNS広告→LINE登録→少額タスク→高額送金要求→出金不可」</td></tr>
+</table>
+
+<div class="page-break"></div>
+<h3>10.5 具体的な活用フロー（例：健康詐欺の検出）</h3>
+<p>以下に、Cat5（健康詐欺）を例として、調査データがどのように検出に活用されるかを示します。</p>
+
+<div style="background:#FAFBFC; border:2px solid #4A6FA5; border-radius:10px; padding:14px; margin:14px 0;">
+
+<div style="margin-bottom:12px;">
+<div style="font-weight:600; color:#4A6FA5; font-size:10pt; margin-bottom:4px;">Step 1: 公的機関の事例収集</div>
+<div style="font-size:9pt; background:#E8F0FE; padding:8px; border-radius:4px;">
+消費者庁の措置命令データベースから、健康食品・サプリメントに対する景表法違反事例を収集。<br>
+例: シボローカ措置命令（2024年3月）— 「食事制限や運動なしで短期間で痩身効果」と表示するも合理的根拠なし。
+</div>
+</div>
+
+<div style="text-align:center; font-size:14pt; color:#4A6FA5;">&#9660;</div>
+
+<div style="margin-bottom:12px;">
+<div style="font-weight:600; color:#4A6FA5; font-size:10pt; margin-bottom:4px;">Step 2: 検出パターンとしてプロンプトに組込み</div>
+<div style="font-size:9pt; background:#E8F0FE; padding:8px; border-radius:4px;">
+措置命令の対象となった表現をプロンプトのCat5検出フレーズに反映。<br>
+<code>「食事制限不要」「飲むだけで」「楽ヤセ」「短期間で薄毛改善」</code><br>
+併せて処分事例: <code>「シボローカ/フラボス措置命令(2024年3月)」「MIHORE措置命令(2024年10月)」</code>
+</div>
+</div>
+
+<div style="text-align:center; font-size:14pt; color:#4A6FA5;">&#9660;</div>
+
+<div style="margin-bottom:12px;">
+<div style="font-weight:600; color:#4A6FA5; font-size:10pt; margin-bottom:4px;">Step 3: AIがサイトを分析</div>
+<div style="font-size:9pt; background:#E8F0FE; padding:8px; border-radius:4px;">
+分析対象サイトに「飲むだけで-5kg」「食事制限不要で楽に痩せる」等の表現がある場合、<br>
+Gemini AIはプロンプト内の検出フレーズ・措置命令事例と照合し、Cat5（健康詐欺）を検出。<br>
+<code>claim_credibility</code> と <code>scam_pattern</code> に低スコアを付与。
+</div>
+</div>
+
+<div style="text-align:center; font-size:14pt; color:#4A6FA5;">&#9660;</div>
+
+<div>
+<div style="font-weight:600; color:#4A6FA5; font-size:10pt; margin-bottom:4px;">Step 4: 結果レポートに根拠を提示</div>
+<div style="font-size:9pt; background:#FFF8E1; padding:8px; border-radius:4px;">
+検出結果の所見（findings）に、サイト本文からの引用と共に<br>
+「景品表示法違反の措置命令事例（シボローカ等）と類似する表現パターン」として根拠を提示。
+</div>
+</div>
+
+</div>
+
+<h3>10.6 誤検知防止のための事例活用</h3>
+<p>収集した事例データは検出だけでなく、<b>正当なサービスの誤検知防止</b>にも活用されています。</p>
+
+<table>
+  <tr><th>正当なサービス</th><th>誤検知リスク</th><th>事例に基づく判別基準</th></tr>
+  <tr><td>正規の金融サービス</td><td>「投資」「利益」等のキーワードでCat2に誤検出</td><td>金融庁登録番号の体系（「関東財務局長(金商)第○○号」）が正しいか、金商法に基づくリスク説明があるかで判別</td></tr>
+  <tr><td>正規の健康食品販売</td><td>「健康」「サプリ」等でCat5に誤検出</td><td>機能性表示食品届出番号の有無、「個人の感想です」等の免責表記、特商法表記の完備で判別</td></tr>
+  <tr><td>弁護士の被害回復支援</td><td>「被害金回収」でCat6に誤検出</td><td>日本弁護士連合会登録番号の有無、振り込め詐欺救済法に基づく法的手続きの範囲内かで判別</td></tr>
+  <tr><td>正規の占いサービス</td><td>「占い」「鑑定」でCat19に誤検出</td><td>料金体系の明示、特商法表記の完備、解約方法の明示、「娯楽目的」の位置づけで判別</td></tr>
+</table>
+
+<div class="important">詐欺サイトが正当なサービスの特徴を装うケース（偽の登録番号、コピペされた免責文等）にも対応するため、「運営者情報の有無」より「サービス内容の実現可能性」を重視する判定ルールを設けています。</div>
+
+<!-- 11. Security -->
+<div class="page-break"></div>
+<h2 id="security">11. セキュリティ設計</h2>
+
+<h3>11.1 Worker セキュリティ</h3>
+<table>
+  <tr><th>対策</th><th>詳細</th></tr>
+  <tr><td>CORS オリジン制限</td><td>GitHub Pages + localhost のみ許可。ワイルドカード(<code>*</code>)廃止</td></tr>
+  <tr><td>認証</td><td>/fetch, /models/* は <code>X-API-Key</code> ヘッダー必須</td></tr>
+  <tr><td>SSRF防止</td><td>プライベートIPv4/IPv6、10進整数IP、16進IP、8進表記をすべてブロック</td></tr>
+  <tr><td>リダイレクト追跡</td><td>各ホップでSSRFチェック、最大5回</td></tr>
+  <tr><td>HTMLサイズ制限</td><td>200KB上限</td></tr>
+  <tr><td>タイムアウト</td><td>HTML取得 10秒、Gemini API 60秒</td></tr>
+  <tr><td>パス検証</td><td><code>models/[a-zA-Z][\w.-]*:generateContent</code> のみ許可</td></tr>
+  <tr><td>リクエストサイズ</td><td>Gemini APIリクエスト 500KB上限</td></tr>
+</table>
+
+<h3>11.2 フロントエンドセキュリティ</h3>
+<table>
+  <tr><th>対策</th><th>詳細</th></tr>
+  <tr><td>APIキー保存</td><td>localStorage（BYOK設計の制限、利用規約で明記）</td></tr>
+  <tr><td>APIキー形式検証</td><td><code>/^AIza[A-Za-z0-9_-]{35}$/</code> で形式チェック</td></tr>
+  <tr><td>XSS防止</td><td>DOM出力は <code>textContent</code> 使用（innerHTML最小限・ユーザー入力直接挿入なし）</td></tr>
+  <tr><td>Selector Injection防止</td><td>localStorage値のホワイトリスト検証</td></tr>
+  <tr><td>Worker URL秘匿</td><td>デフォルトURLはlocalStorageに保存しない、設定UIでは空欄表示</td></tr>
+</table>
+
+<h3>11.3 SSRF防止の詳細</h3>
+<table>
+  <tr><th>ブロック対象</th><th>例</th></tr>
+  <tr><td>ローカルホスト</td><td>localhost, 127.0.0.1, ::1, 0.0.0.0</td></tr>
+  <tr><td>プライベートIPv4</td><td>10.x.x.x, 172.16-31.x.x, 192.168.x.x</td></tr>
+  <tr><td>CGNAT</td><td>100.64.0.0/10</td></tr>
+  <tr><td>リンクローカル</td><td>169.254.x.x, fe80::*</td></tr>
+  <tr><td>IPv6 ユニークローカル</td><td>fc00::/7, fd00::/8</td></tr>
+  <tr><td>IPv4マップドIPv6</td><td>::ffff:127.0.0.1</td></tr>
+  <tr><td>10進整数IP</td><td>2130706433 (= 127.0.0.1)</td></tr>
+  <tr><td>16進IP</td><td>0x7f000001</td></tr>
+  <tr><td>8進表記</td><td>0177.0.0.1</td></tr>
+</table>
+
+<!-- 11. Tech Spec -->
+<div class="page-break"></div>
+<h2 id="tech-spec">12. 技術仕様</h2>
+
+<h3>12.1 デプロイ情報</h3>
+<table>
+  <tr><th>項目</th><th>値</th></tr>
+  <tr><td>フロントエンドURL</td><td>https://mizuking796.github.io/site-safety-checker/</td></tr>
+  <tr><td>Worker URL</td><td>https://site-safety-checker.mizuki-tools.workers.dev</td></tr>
+  <tr><td>リポジトリ</td><td>mizuking796/site-safety-checker（public）</td></tr>
+  <tr><td>AIモデル</td><td>Gemini 2.5 Flash（gemini-2.5-flash）</td></tr>
+  <tr><td>SEO</td><td>noindex + robots.txt Disallow: /</td></tr>
+</table>
+
+<h3>12.2 ブラウザ対応</h3>
+<table>
+  <tr><th>機能</th><th>必要API</th><th>対応ブラウザ</th></tr>
+  <tr><td>コア機能</td><td>fetch, Promise, localStorage</td><td>Chrome 60+, Safari 12+, Firefox 55+</td></tr>
+  <tr><td>タイムアウト</td><td>AbortSignal.timeout()</td><td>Chrome 103+, Safari 16.4+, Firefox 100+</td></tr>
+  <tr><td>レーダーチャート</td><td>Canvas 2D, devicePixelRatio</td><td>全モダンブラウザ</td></tr>
+</table>
+
+<h3>12.3 localStorage キー</h3>
+<table>
+  <tr><th>キー</th><th>型</th><th>説明</th></tr>
+  <tr><td><code>ssc_config</code></td><td>JSON</td><td><code>{ apiKey: string, workerUrl?: string }</code></td></tr>
+  <tr><td><code>ssc_consent</code></td><td>string</td><td>ISO日付（例: "2026-02-12"）</td></tr>
+  <tr><td><code>ssc_sensitivity</code></td><td>string</td><td>"high" | "standard" | "low"</td></tr>
+</table>
+
+<h3>12.4 カラースキーム</h3>
+<table>
+  <tr><th>用途</th><th>カラーコード</th><th style="width:60px;">プレビュー</th></tr>
+  <tr><td>Primary</td><td>#4A6FA5</td><td style="background:#4A6FA5;"></td></tr>
+  <tr><td>Background</td><td>#F5F7FA</td><td style="background:#F5F7FA; border:1px solid #ddd;"></td></tr>
+  <tr><td>Safe</td><td>#27AE60</td><td style="background:#27AE60;"></td></tr>
+  <tr><td>Warning</td><td>#F39C12</td><td style="background:#F39C12;"></td></tr>
+  <tr><td>Danger</td><td>#E74C3C</td><td style="background:#E74C3C;"></td></tr>
+</table>
+
+<!-- 12. File Structure -->
+<h2 id="file-structure">13. ファイル構成</h2>
+
+<table>
+  <tr><th>ファイル</th><th>行数</th><th>説明</th></tr>
+  <tr><td>index.html</td><td>309</td><td>5画面シェル（Consent/Setup/Check/Results/Settings）</td></tr>
+  <tr><td>css/style.css</td><td>726</td><td>全スタイル（レスポンシブ対応）</td></tr>
+  <tr><td>js/app.js</td><td>1,652</td><td>全ロジック（IIFE、9モジュール構成）</td></tr>
+  <tr><td>worker/worker.js</td><td>283</td><td>Cloudflare Worker（CORS+認証+SSRF防止）</td></tr>
+  <tr><td>worker/wrangler.toml</td><td>3</td><td>Worker デプロイ設定</td></tr>
+  <tr><td>worker/README.md</td><td>39</td><td>Worker デプロイ手順</td></tr>
+  <tr><td>img/*.png</td><td>4枚</td><td>APIキー取得ガイド画像</td></tr>
+  <tr><td>robots.txt</td><td>3</td><td>クローラー拒否設定</td></tr>
+  <tr><td>.gitignore</td><td>2</td><td>REFERENCE.md, .DS_Store除外</td></tr>
+  <tr><td colspan="2"><b>合計</b></td><td><b>2,970行 + 画像4枚</b></td></tr>
+</table>
+
+<div style="margin-top:40px; padding-top:12px; border-top:1px solid #ddd; font-size:8.5pt; color:#888; text-align:center;">
+  Site Safety Checker 技術資料 v1.2 &mdash; 2026年2月12日作成 &mdash; 特定非営利活動法人リハビリコラボレーション
+</div>
+
+</body>
+</html>

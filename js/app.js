@@ -132,6 +132,26 @@ const UrlAnalyzer = {
       result.issues.push({ title: '不審なパスキーワード', severity: 'low', desc: `パスに「${found.join('」「')}」が含まれています。` });
     }
 
+    // Excessive hyphens in hostname (4+)
+    const hyphenCount = (url.hostname.match(/-/g) || []).length;
+    if (hyphenCount >= 4) {
+      result.domain_trust -= 10;
+      result.issues.push({ title: '過剰なハイフン', severity: 'low', desc: `ホスト名に${hyphenCount}個のハイフンがあります。` });
+    }
+
+    // Abnormal port
+    if (url.port && !['80','443',''].includes(url.port)) {
+      result.tech_safety -= 15;
+      result.issues.push({ title: '異常なポート番号', severity: 'medium', desc: `ポート ${url.port} が使用されています。` });
+    }
+
+    // Excessive path depth (6+)
+    const pathSegments = url.pathname.split('/').filter(Boolean);
+    if (pathSegments.length >= 6) {
+      result.domain_trust -= 10;
+      result.issues.push({ title: '過剰なパス深度', severity: 'low', desc: `パスが${pathSegments.length}階層あります。` });
+    }
+
     // Long URL — check path length only (exclude query params like gclid, utm_*, fbclid)
     const pathLen = (url.origin + url.pathname).length;
     if (pathLen > 200) {
@@ -275,7 +295,7 @@ const HtmlExtractor = {
 // Gemini API Client
 // ============================================================
 const GeminiClient = {
-  async analyze(config, urlStr, urlAnalysis, htmlContent, headers) {
+  async analyze(config, urlStr, urlAnalysis, htmlContent, headers, cancelSignal) {
     const workerUrl = (config.workerUrl || DEFAULT_WORKER_URL).replace(/\/+$/, '');
     const apiKey = config.apiKey;
 
@@ -296,7 +316,7 @@ const GeminiClient = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(60000)
+      signal: _combinedSignal(cancelSignal, 60000)
     });
 
     if (!resp.ok) {
@@ -339,8 +359,8 @@ const GeminiClient = {
 4. 正当なサイトには高スコアを付ける。疑わしい点がなければ安全と判定する。
 5. 推測や可能性だけで低スコアを付けない。具体的根拠がある場合のみ減点する。ただし根拠が明確な場合は躊躇なく低スコアを付けること。
 6. 複数カテゴリの部分一致だけで危険と判定しない。文脈と全体像を重視する。ただし、19カテゴリの手口パターンに明確に合致する場合は、scam_patternを20以下にすること。
-8. 誤検知防止ガイドは正当なサービスを守るためのもの。詐欺サイトが正当なサービスの特徴を装っている場合（例: 偽の登録番号、コピペされた免責文）は保護対象外。
 7. この分析は「現時点でのこのページの内容」のみが対象。過去の行政処分歴や企業の評判は判断材料にしない。
+8. 誤検知防止ガイドは正当なサービスを守るためのもの。詐欺サイトが正当なサービスの特徴を装っている場合（例: 偽の登録番号、コピペされた免責文）は保護対象外。
 ${sensitivityInstruction}
 ## 対象URL
 ${urlStr}
@@ -1133,7 +1153,7 @@ const ResultsRenderer = {
 
     // Score bars
     const barsEl = document.getElementById('scoreBars');
-    barsEl.innerHTML = '';
+    let barsHtml = '';
     ScoreIntegrator.DIMENSIONS.forEach(dim => {
       const val = Math.max(0, Math.min(100, Math.round(Number(scores[dim.key]) || 0)));
       let cls;
@@ -1143,7 +1163,7 @@ const ResultsRenderer = {
       else if (val >= 20) cls = 'high';
       else cls = 'critical';
 
-      barsEl.innerHTML += `
+      barsHtml += `
         <div class="score-bar-item">
           <div class="score-bar-label">
             <span class="score-bar-name">${this._esc(dim.label)}</span>
@@ -1154,6 +1174,7 @@ const ResultsRenderer = {
           </div>
         </div>`;
     });
+    barsEl.innerHTML = barsHtml;
 
     // Detected categories
     const catCard = document.getElementById('categoriesCard');
@@ -1230,11 +1251,12 @@ const ResultsRenderer = {
     showScreen('screenResults');
   },
 
+  _escDiv: null,
   _esc(s) {
     if (!s) return '';
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
+    if (!this._escDiv) this._escDiv = document.createElement('div');
+    this._escDiv.textContent = s;
+    return this._escDiv.innerHTML;
   }
 };
 
@@ -1242,8 +1264,26 @@ const ResultsRenderer = {
 // Main Analysis Flow
 // ============================================================
 let isChecking = false;
+let checkAbortController = null;
+
+// Combine cancel signal + timeout into one signal
+function _combinedSignal(cancelSignal, timeoutMs) {
+  if (!cancelSignal) return AbortSignal.timeout(timeoutMs);
+  if (typeof AbortSignal.any === 'function') {
+    return AbortSignal.any([cancelSignal, AbortSignal.timeout(timeoutMs)]);
+  }
+  // Fallback for older browsers
+  const c = new AbortController();
+  const tid = setTimeout(() => { if (!c.signal.aborted) c.abort(); }, timeoutMs);
+  cancelSignal.addEventListener('abort', () => { clearTimeout(tid); if (!c.signal.aborted) c.abort(); }, { once: true });
+  return c.signal;
+}
+
 async function runCheck(urlStr) {
   if (isChecking) return;
+  checkAbortController?.abort();
+  checkAbortController = new AbortController();
+  const cancelSignal = checkAbortController.signal;
   isChecking = true;
   const config = loadConfig();
   let incomplete = null;
@@ -1254,7 +1294,7 @@ async function runCheck(urlStr) {
   ProgressMgr.show();
 
   try {
-    // Stage 1: URL analysis + Worker fetch in PARALLEL
+    // Stage 1: URL analysis + Worker fetch
     ProgressMgr.update('URL構造を分析中...', 5);
     const clientAnalysis = UrlAnalyzer.analyze(urlStr);
     ProgressMgr.update('サイトを取得中...', 15);
@@ -1264,7 +1304,7 @@ async function runCheck(urlStr) {
       const workerUrl = (config.workerUrl || DEFAULT_WORKER_URL).replace(/\/+$/, '');
       const fetchResp = await fetch(`${workerUrl}/fetch?url=${encodeURIComponent(urlStr)}`, {
         headers: config.apiKey ? { 'X-API-Key': config.apiKey } : {},
-        signal: AbortSignal.timeout(15000)
+        signal: _combinedSignal(cancelSignal, 15000)
       });
       if (fetchResp.ok) {
         fetchData = await fetchResp.json();
@@ -1320,9 +1360,10 @@ async function runCheck(urlStr) {
     if (config.apiKey) {
       ProgressMgr.update('AI分析中...', 55);
       try {
-        aiResult = await GeminiClient.analyze(config, urlStr, clientAnalysis, htmlContent, headers);
+        aiResult = await GeminiClient.analyze(config, urlStr, clientAnalysis, htmlContent, headers, cancelSignal);
         ProgressMgr.update('AI分析中...', 85);
       } catch (e) {
+        if (cancelSignal.aborted) throw e; // Re-throw if canceled
         if (!incomplete) {
           incomplete = 'AI分析に失敗しました（' + e.message.slice(0, 100) + '）。部分的な結果です。';
         } else {
@@ -1333,6 +1374,9 @@ async function runCheck(urlStr) {
       incomplete = (incomplete || '') + ' APIキーが未設定のためAI分析をスキップしました。';
     }
 
+    // Check if canceled before rendering
+    if (cancelSignal.aborted) return;
+
     // Stage 4: Integrate & render
     ProgressMgr.update('結果を統合中...', 95);
     const integrated = ScoreIntegrator.integrate(clientAnalysis, aiResult);
@@ -1340,10 +1384,12 @@ async function runCheck(urlStr) {
     ProgressMgr.update('完了', 100);
     await sleep(200);
 
+    if (cancelSignal.aborted) return;
     ProgressMgr.hide();
     ResultsRenderer.render(urlStr, integrated, aiResult, clientAnalysis, incomplete ? incomplete.trim() : null);
 
   } catch (e) {
+    if (cancelSignal.aborted) return; // Silently exit if canceled
     console.error('Analysis error:', e);
     ProgressMgr.hide();
     alert('分析中にエラーが発生しました: ' + (e.message || '不明なエラー'));
@@ -1361,6 +1407,9 @@ async function runTextCheck(urlStr, pastedText) {
     alert('APIキーが設定されていません。設定画面からAPIキーを入力してください。');
     return;
   }
+  checkAbortController?.abort();
+  checkAbortController = new AbortController();
+  const cancelSignal = checkAbortController.signal;
   isChecking = true;
   let incomplete = null;
   let aiResult = null;
@@ -1400,21 +1449,25 @@ async function runTextCheck(urlStr, pastedText) {
     // Gemini analysis
     ProgressMgr.update('AI分析中...', 40);
     try {
-      aiResult = await GeminiClient.analyze(config, urlStr || '(URLなし・テキスト直接入力)', clientAnalysis, htmlContent, null);
+      aiResult = await GeminiClient.analyze(config, urlStr || '(URLなし・テキスト直接入力)', clientAnalysis, htmlContent, null, cancelSignal);
       ProgressMgr.update('スコアを統合中...', 85);
     } catch (e) {
+      if (cancelSignal.aborted) throw e;
       const msg = e.message || '';
       incomplete = (incomplete ? incomplete + ' ' : '') + `AI分析に失敗しました（${msg}）。部分的な結果です。`;
     }
 
+    if (cancelSignal.aborted) return;
     const integrated = ScoreIntegrator.integrate(clientAnalysis, aiResult);
     ProgressMgr.update('完了', 100);
     await sleep(200);
 
+    if (cancelSignal.aborted) return;
     ProgressMgr.hide();
     ResultsRenderer.render(urlStr || '(テキスト入力)', integrated, aiResult, clientAnalysis, incomplete ? incomplete.trim() : null);
 
   } catch (e) {
+    if (cancelSignal.aborted) return;
     console.error('Analysis error:', e);
     ProgressMgr.hide();
     alert('分析中にエラーが発生しました: ' + (e.message || '不明なエラー'));
@@ -1524,6 +1577,10 @@ function init() {
     const workerUrlInput = document.getElementById('settingsWorkerUrl').value.trim();
     if (!apiKey) {
       alert('APIキーを入力してください。');
+      return;
+    }
+    if (!/^AIza[A-Za-z0-9_-]{35}$/.test(apiKey)) {
+      alert('APIキーの形式が正しくありません。AIzaで始まる39文字のキーを入力してください。');
       return;
     }
     const cfgToSave = { apiKey };
@@ -1639,8 +1696,9 @@ function init() {
   // New check
   document.getElementById('btnNewCheck').addEventListener('click', resetAndGoHome);
 
-  // Cancel check
+  // Cancel check — abort in-flight requests
   document.getElementById('btnCancelCheck').addEventListener('click', () => {
+    checkAbortController?.abort();
     isChecking = false;
     ProgressMgr.hide();
     showScreen('screenCheck');
